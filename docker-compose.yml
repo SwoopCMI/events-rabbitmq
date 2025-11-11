@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  rabbitmq:
+    build: .
+    ports:
+      - "5672:5672"     # AMQP port
+      - "15672:15672"   # Management UI
+      - "15692:15692"   # Prometheus metrics
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER:-rabbitmq}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS:-testpassword123}
+      - RABBITMQ_ERLANG_COOKIE=${RABBITMQ_ERLANG_COOKIE:-secret-cookie}
+      - RABBITMQ_HOST=localhost
+      - RABBITMQ_PORT=15672
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
+      - ALERT_MAX_QUEUE_LENGTH=${ALERT_MAX_QUEUE_LENGTH:-1000}
+      - ALERT_MAX_UNACKED_MESSAGES=${ALERT_MAX_UNACKED_MESSAGES:-500}
+      - ALERT_MIN_CONSUMERS=${ALERT_MIN_CONSUMERS:-1}
+      - ALERT_MAX_MEMORY_PERCENT=${ALERT_MAX_MEMORY_PERCENT:-80}
+      - ALERT_MAX_DISK_PERCENT=${ALERT_MAX_DISK_PERCENT:-85}
+      - ALERT_PROCESSING_HALT_THRESHOLD=${ALERT_PROCESSING_HALT_THRESHOLD:-100}
+      - MONITORING_INTERVAL=${MONITORING_INTERVAL:-60}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  rabbitmq_data:

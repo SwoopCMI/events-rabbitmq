@@ -9,6 +9,29 @@ services:
     value: rabbitmq
   - key: RABBITMQ_DEFAULT_PASS
     generateValue: true
+  # Monitoring configuration
+  - key: RABBITMQ_HOST
+    value: localhost
+  - key: RABBITMQ_PORT
+    value: 15672
+  # Slack webhook URL for alerts
+  - key: SLACK_WEBHOOK_URL
+    sync: false
+  # Alert thresholds (customize as needed)
+  - key: ALERT_MAX_QUEUE_LENGTH
+    value: 1000
+  - key: ALERT_MAX_UNACKED_MESSAGES
+    value: 500
+  - key: ALERT_MIN_CONSUMERS
+    value: 1
+  - key: ALERT_MAX_MEMORY_PERCENT
+    value: 80
+  - key: ALERT_MAX_DISK_PERCENT
+    value: 85
+  - key: ALERT_PROCESSING_HALT_THRESHOLD
+    value: 100
+  - key: MONITORING_INTERVAL
+    value: 60
   disk:
     name: rabbitmq
     mountPath: /var/lib/rabbitmq
