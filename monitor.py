@@ -32,11 +32,12 @@ class AlertThresholds:
     connection_failure_threshold: int = 3
     
 class RabbitMQMonitor:
-        def get_queue_config(self, queue_name):
-            """Return (threshold, cooldown) for a given queue name"""
-            if queue_name in self.long_job_queues:
-                return self.long_job_threshold, self.long_job_cooldown
-            return self.thresholds.max_queue_length, self.default_alert_cooldown
+    def get_queue_config(self, queue_name):
+        """Return (threshold, cooldown) for a given queue name"""
+        if queue_name in self.long_job_queues:
+            return self.long_job_threshold, self.long_job_cooldown
+        return self.thresholds.max_queue_length, self.default_alert_cooldown
+
     def __init__(self):
         self.rabbitmq_host = os.getenv('RABBITMQ_HOST', 'localhost')
         self.rabbitmq_port = os.getenv('RABBITMQ_PORT', '15672')
