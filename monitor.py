@@ -32,6 +32,11 @@ class AlertThresholds:
     connection_failure_threshold: int = 3
     
 class RabbitMQMonitor:
+        def get_queue_config(self, queue_name):
+            """Return (threshold, cooldown) for a given queue name"""
+            if queue_name in self.long_job_queues:
+                return self.long_job_threshold, self.long_job_cooldown
+            return self.thresholds.max_queue_length, self.default_alert_cooldown
     def __init__(self):
         self.rabbitmq_host = os.getenv('RABBITMQ_HOST', 'localhost')
         self.rabbitmq_port = os.getenv('RABBITMQ_PORT', '15672')
@@ -44,13 +49,25 @@ class RabbitMQMonitor:
         
         self.thresholds = AlertThresholds()
         self.last_alerts = {}  # Track last alert times to prevent spam
-        self.alert_cooldown = 300  # 5 minutes cooldown between same alerts
+        # Per-queue custom config for long-running queues (env support)
+        # Comma-separated queue names
+        long_job_queues_env = os.getenv('LONG_JOB_QUEUES', '')
+        self.long_job_queues = [q.strip() for q in long_job_queues_env.split(',') if q.strip()] or [
+            "colateral-events-production-location-ranges.delay",
+            "colateral-events-production-location-ranges"
+        ]
+        # Per-queue threshold and cooldown (env override, fallback to defaults)
+        self.long_job_threshold = int(os.getenv('LONG_JOB_QUEUE_THRESHOLD', '1000000'))
+        self.long_job_cooldown = int(os.getenv('LONG_JOB_QUEUE_COOLDOWN', '10800'))
+        self.default_alert_cooldown = int(os.getenv('DEFAULT_ALERT_COOLDOWN', '1800'))
+
+        self.alert_cooldown = self.default_alert_cooldown  # 5 minutes cooldown between same alerts (default)
         self.connection_failures = 0
         
     async def send_slack_alert(self, message: str, severity: str = "warning"):
         """Send rich alert to Slack with proper formatting"""
         if not self.slack_webhook_url:
-            logger.warning("No Slack webhook URL configured, skipping alert")
+            logger.warning("No Slack webhook URL configured, skipping alert")   
             return
             
         color = {
@@ -81,11 +98,12 @@ class RabbitMQMonitor:
         except Exception as e:
             logger.error(f"Error sending Slack alert: {e}")
 
-    def should_send_alert(self, alert_key: str) -> bool:
-        """Prevent alert spam with intelligent cooldown"""
+    def should_send_alert(self, alert_key: str, cooldown: int = None) -> bool:
+        """Prevent alert spam with intelligent cooldown (per alert_key)"""
         now = time.time()
+        cd = cooldown if cooldown is not None else self.default_alert_cooldown
         if alert_key in self.last_alerts:
-            if now - self.last_alerts[alert_key] < self.alert_cooldown:
+            if now - self.last_alerts[alert_key] < cd:
                 return False
         self.last_alerts[alert_key] = now
         return True
@@ -112,30 +130,29 @@ class RabbitMQMonitor:
         queues = await self.get_api_data("queues")
         if not queues:
             return
-            
         for queue in queues:
             queue_name = queue.get('name', 'unknown')
             vhost = queue.get('vhost', '/')
-            
+            # Per-queue config
+            queue_threshold, queue_cooldown = self.get_queue_config(queue_name)
             # 🔥 QUEUE BACKUP DETECTION
             messages = queue.get('messages', 0)
-            if messages > self.thresholds.max_queue_length:
+            if messages > queue_threshold:
                 alert_key = f"queue_backup_{queue_name}"
-                if self.should_send_alert(alert_key):
+                if self.should_send_alert(alert_key, queue_cooldown):
                     await self.send_slack_alert(
                         f"🚨 **QUEUE BACKUP DETECTED**\n"
                         f"Queue: `{queue_name}`\n"
-                        f"Messages: **{messages:,}** (threshold: {self.thresholds.max_queue_length:,})\n"
+                        f"Messages: **{messages:,}** (threshold: {queue_threshold:,})\n"
                         f"VHost: `{vhost}`\n"
                         f"🔧 *Action needed: Check consumers or increase capacity*",
                         "critical"
                     )
-            
             # ⚠️ UNACKNOWLEDGED MESSAGES
             unacked = queue.get('messages_unacknowledged', 0)
             if unacked > self.thresholds.max_unacknowledged_messages:
                 alert_key = f"unacked_{queue_name}"
-                if self.should_send_alert(alert_key):
+                if self.should_send_alert(alert_key, queue_cooldown):
                     await self.send_slack_alert(
                         f"⚠️ **HIGH UNACKNOWLEDGED MESSAGES**\n"
                         f"Queue: `{queue_name}`\n"
@@ -143,12 +160,11 @@ class RabbitMQMonitor:
                         f"🔧 *Consumers may be slow or failing to ack*",
                         "warning"
                     )
-            
             # 👥 CONSUMER MONITORING
             consumers = queue.get('consumers', 0)
             if messages > 0 and consumers < self.thresholds.min_consumers_per_queue:
                 alert_key = f"no_consumers_{queue_name}"
-                if self.should_send_alert(alert_key):
+                if self.should_send_alert(alert_key, queue_cooldown):
                     await self.send_slack_alert(
                         f"🔍 **MISSING CONSUMERS**\n"
                         f"Queue: `{queue_name}` has **{messages:,}** messages\n"
@@ -156,17 +172,15 @@ class RabbitMQMonitor:
                         f"🔧 *Start consumer processes immediately*",
                         "warning"
                     )
-            
             # ⏹️ PROCESSING HALT DETECTION
             message_stats = queue.get('message_stats', {})
             publish_rate = message_stats.get('publish_details', {}).get('rate', 0)
             consume_rate = message_stats.get('deliver_get_details', {}).get('rate', 0)
-            
             # Alert if messages are piling up but nothing is being consumed
             if (messages > self.thresholds.processing_halt_threshold and 
                 consume_rate == 0 and publish_rate > 0):
                 alert_key = f"processing_halt_{queue_name}"
-                if self.should_send_alert(alert_key):
+                if self.should_send_alert(alert_key, queue_cooldown):
                     await self.send_slack_alert(
                         f"⏹️ **PROCESSING COMPLETELY HALTED**\n"
                         f"Queue: `{queue_name}`\n"
